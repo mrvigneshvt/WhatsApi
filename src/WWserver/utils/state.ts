@@ -2,6 +2,13 @@ import { Pool } from "mysql2/promise";
 import { db } from "../../Database/init";
 import { AuthenticationState, BufferJSON, initAuthCreds } from "baileys";
 import { base64ToBuffer, bufferToBase64, fixInitBuffers } from "./util";
+import { errorLogger } from "../../../utils/ErrorLogger";
+import {
+  SessionDetails,
+  StatusTypes,
+} from "../../Database/Tables/SessionDetails";
+import { dbChangeTypes } from "../../Database/types";
+import { LogStatusTypes, SessionLogs } from "../../Database/Tables/SessionLogs";
 
 interface AuthData {
   creds: any;
@@ -11,6 +18,92 @@ interface AuthData {
 class State {
   constructor() {}
 
+  public async getAuthentication(
+    sId: string
+  ): Promise<Record<string, any> | false> {
+    try {
+      const [rows]: any = await db.connecti0n.query(
+        `SELECT * FROM ${SessionDetails.tableName} WHERE ${SessionDetails.column.ownerId.name} = ?`,
+        [sId]
+      );
+
+      if (!rows.length) {
+        return false;
+      }
+
+      return rows[0];
+    } catch (error) {
+      errorLogger.logs("getAuthentication: ", error);
+      return false;
+    }
+  }
+
+  public async listDBconnections(): Promise<Record<string, any>[]> {
+    const [rows] = await db.connecti0n.query(
+      `SELECT session FROM ${SessionDetails.tableName} WHERE ${SessionDetails.column.status.name} = 'Connected'`
+    );
+    console.log(rows, "//listConn");
+    return rows;
+  }
+
+  public async appendLog(sId: string, status: LogStatusTypes) {
+    const column = SessionLogs.column;
+    await db.connecti0n.query(
+      `INSERT INTO  ${SessionLogs.tableName} (${column.sessionId.name} , ${column.status.name}) VALUES (?,?)`,
+      [sId, status]
+    );
+  }
+  public async saveAuthentication(
+    sId: string,
+    oId: string,
+    sessionData: any,
+    status: LogStatusTypes
+  ): Promise<boolean> {
+    try {
+      const columns = SessionDetails.column;
+      const query = `
+        INSERT INTO ${SessionDetails.tableName}
+          (${columns.ownerId.name}, ${columns.session.name}, ${columns.status.name})
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          ${columns.session.name} = VALUES(${columns.session.name}),
+          ${columns.status.name} = VALUES(${columns.status.name}),
+          ${columns.updatedAt.name} = CURRENT_TIMESTAMP
+      `;
+
+      const result = await db.connecti0n.query(query, [
+        oId,
+        JSON.stringify(sessionData),
+        status,
+      ]);
+
+      return result.affectedRowws ? true : false;
+    } catch (error) {
+      errorLogger.logs("saveAuthentication: ", error);
+      return false;
+    }
+  }
+
+  public async updateStatus(
+    oId: string,
+    status: StatusTypes
+  ): Promise<boolean> {
+    try {
+      const columns = SessionDetails.column;
+      const query = `
+        UPDATE ${SessionDetails.tableName}
+        SET ${columns.status.name} = ?, ${columns.updatedAt.name} = CURRENT_TIMESTAMP
+        WHERE ${columns.session.name} = ?
+      `;
+
+      await db.connecti0n.query(query, [status, oId]);
+      return true;
+    } catch (error) {
+      errorLogger.logs("updateStatus: ", error);
+      return false;
+    }
+  }
+
   public async getAuth(sessionId: string): Promise<{
     state: AuthenticationState;
     saveCreds: () => Promise<void>;
@@ -19,22 +112,6 @@ class State {
       "SELECT auth_data FROM sessions WHERE session_id = ?",
       [sessionId]
     );
-
-    // let authData: {
-    //   creds: any;
-    //   keys: { [key: string]: { [id: string]: any } };
-    // };
-
-    // if (!rows.length) {
-    //   authData = { creds: initAuthCreds(), keys: {} };
-    // } else if (typeof rows[0].auth_data === "string") {
-    //   // ✅ parse & restore Buffers
-    //   const parsed = JSON.parse(rows[0].auth_data, BufferJSON.reviver);
-    //   authData = base64ToBuffer(parsed);
-    // } else {
-    //   // already object (but still restore Buffers)
-    //   authData = base64ToBuffer(rows[0].auth_data);
-    // }
 
     let authData: any;
     if (!rows.length) {

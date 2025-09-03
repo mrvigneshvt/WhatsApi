@@ -16,3 +16,5 @@ export type SockMessageTypes =
   | "session closed";
 
 export type SockSessionTypes = "Pending" | "Closed" | "Connected";
+
+export type SockConnectionArgs = "cloud" | "localFS";

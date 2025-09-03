@@ -2,13 +2,14 @@ import { Config } from "../config/init";
 import { errorLogger } from "../utils/ErrorLogger";
 import { db } from "./Database/init";
 import { stateSaver } from "./WWserver/utils/state";
-import express from "express";
+import express, { Request, Response } from "express";
 import bodyParser from "body-parser";
-import { whatServer } from "./WWserver/init";
+import { clients, whatServer } from "./WWserver/init";
 import cors from "cors";
 import { Server } from "socket.io";
 import http from "http";
 import crypto from "crypto";
+import { ServExpress } from "./Servexpress/init";
 
 const app = express();
 
@@ -30,23 +31,15 @@ io.on("connection", (session) => {
   session.on("init-session", async (sessionId) => {
     console.log("INT session ", sessionId);
 
-    await whatServer.connection(sessionId, session);
+    await whatServer.connection("vicky", sessionId, "localFS", session);
+  });
 
-    // const { sock, qrServer } = data;
-
-    // console.log("Resposnse from WhatServer:", sock, qrServer);
-
-    // sock.ev.on("connection.update", (cb) => {
-    //   console.log("Receiving Connection Update CB");
-    //   console.log("outer");
-
-    //   session.emit("connection-update", { sessionId, ...cb });
-    // });
-
-    // sock.ev.on("creds.update", async () => {
-    //   console.log("outer update");
-    //   await stateSaver.saveAuth(sessionId, sock.authState);
-    // });
+  session.on("sessions", async () => {
+    const clean = Array.from(clients.entries()).map(([id, { status }]) => ({
+      sessionId: id,
+      status,
+    }));
+    session.emit("session-send", JSON.stringify(clean));
   });
 
   session.on("disconnect", (cb) => {
@@ -55,13 +48,85 @@ io.on("connection", (session) => {
 });
 
 const port = Config.serverPort;
+const exPort = Config.expressPort;
 
-app.listen();
+app.get("/ping", async (req, res) => {
+  res.status(200).send("BONG !");
+});
+
+app.get("/clients", async (req, res) => {
+  const totalMap = await whatServer.listConnections();
+
+  console.log("LOGGING CLIENTS: ", clients, "//", totalMap);
+  res.status(200).send("BONG !");
+});
+
+app.listen(exPort, "0.0.0.0", async () => {
+  try {
+    console.log("Init Express");
+  } catch (error) {
+    errorLogger.logs("express start", error);
+  }
+});
+
+app.post("/sendMessage", async (req: Request, res: Response) => {
+  try {
+    const { message, authSession, cNum } = req.body;
+
+    if (
+      typeof message !== "string" ||
+      typeof authSession !== "string" ||
+      typeof cNum !== "string"
+    ) {
+      ServExpress.send(res, 400, false, "Invalid Type of Body ");
+      return;
+    }
+    if (!clients.has(authSession)) {
+      ServExpress.send(res, 404, false, "NO SESSION FOUND");
+      return;
+    }
+
+    if (cNum.length < 10) {
+      ServExpress.send(res, 400, false, "BAD REQUEST INVALID CNUM LENGTH");
+      return;
+    }
+
+    let jid = whatServer.valNretJID(cNum);
+
+    if (!jid) {
+      ServExpress.send(res, 400, false, "Invalid cNUM");
+      return;
+    }
+
+    const sendMessage = await whatServer.sendMessage(authSession, jid, message);
+
+    let status;
+
+    switch (sendMessage) {
+      case "sent":
+        status = 200;
+        break;
+      case "session closed":
+        status = 502;
+        break;
+      case "something went wrong":
+        status = 500;
+        break;
+    }
+
+    ServExpress.send(res, status, status == 200 ? true : false, sendMessage);
+
+    return;
+  } catch (error) {
+    errorLogger.logs("/sendMessage", error);
+  }
+});
 
 server.listen(port, "0.0.0.0", async () => {
   console.log("🚀 Server Running on PORT", port);
   try {
     await db.connection();
+    await whatServer.RestartCrash();
   } catch (error) {
     errorLogger.logs("start", error);
     process.exit(1);

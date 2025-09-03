@@ -44,14 +44,12 @@ export function fixInitBuffers(obj: any): any {
   if (Array.isArray(obj)) return obj.map(fixInitBuffers);
 
   if (typeof obj === "object") {
-    // Handle Buffers saved as { type: "Buffer", data: ... }
     if (obj.type === "Buffer" && typeof obj.data === "string") {
       return Buffer.from(obj.data, "base64");
     }
 
     const newObj: any = {};
     for (const key of Object.keys(obj)) {
-      // Only fix if property exists
       if (obj[key] !== undefined) newObj[key] = fixInitBuffers(obj[key]);
     }
     return newObj;
